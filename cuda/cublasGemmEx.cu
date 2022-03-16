@@ -9,6 +9,10 @@ using namespace std;
 #define M 5
 #define N 3
 #define BYTE 128
+
+#define AType int8_t
+#define BType int8_t
+#define CType float
  
 int main() 
 {   
@@ -17,10 +21,10 @@ int main()
   
       // 在 CPU内存 中为将要计算的矩阵开辟空间
       float *h_A = (float *)malloc (N * M * sizeof(float));
-      char *h_B = (char *)malloc (N * M * sizeof(char));
+      BType *h_B = (BType *)malloc (N * M * sizeof(BType));
       
       // 在 CPU内存 中为将要存放运算结果的矩阵开辟空间
-      float *h_C = (float *)malloc ( M * M * sizeof(float));
+      CType *h_C = (CType *)malloc ( M * M * sizeof(CType));
   
       float *f_A = (float *)malloc(N * M * sizeof(float));
       float *f_B = (float *)malloc(N * M * sizeof(float));
@@ -35,8 +39,8 @@ int main()
       for(int i = 0; i < N * M; i++)
       {
 //          h_A[i] = (char)(round(f_A[i] * BYTE)); 
-          h_A[i] = f_A[i];
-          h_B[i] = (char)(round(f_B[i] * BYTE)); 
+          h_A[i] = (AType)f_A[i];
+          h_B[i] = (BType)f_B[i]; 
       }
       
       // 打印待测试的矩阵
@@ -72,49 +76,51 @@ int main()
           return EXIT_FAILURE;
       }
   
-      float *d_A;
-      char *d_B;
-      float *d_C;
+      AType *d_A;
+      BType *d_B;
+      CType *d_C;
       // 在 显存 中为将要计算的矩阵开辟空间
       cudaMalloc (
           (void **)&d_A,    // 指向开辟的空间的指针
-          N * M * sizeof(float)    //　需要开辟空间的字节数
+          N * M * sizeof(AType)    //　需要开辟空间的字节数
       );
       cudaMalloc (
           (void **)&d_B,    
-          N * M * sizeof(char)    
+          N * M * sizeof(BType)    
       );
   
       // 在 显存 中为将要存放运算结果的矩阵开辟空间
       cudaMalloc (
           (void **)&d_C,
-          M * M * sizeof(float)    
+          M * M * sizeof(CType)    
       );
   
       // 将矩阵数据传递进 显存 中已经开辟好了的空间
       cublasSetVector (
           N * M,    // 要存入显存的元素个数
-          sizeof(float),    // 每个元素大小
+          sizeof(AType),    // 每个元素大小
           h_A,    // 主机端起始地址
           1,    // 连续元素之间的存储间隔
           d_A,    // GPU 端起始地址
           1    // 连续元素之间的存储间隔
       );
      //注意：当矩阵过大时，使用cudaMemcpy是更好地选择：
-     //cudaMemcpy(d_A, h_A, sizeof(char)*N*M, cudaMemcpyHostToDevice);
+     cudaMemcpy(d_A, h_A, sizeof(AType)*N*M, cudaMemcpyHostToDevice);
  
      cublasSetVector (
           N * M, 
-          sizeof(char), 
+          sizeof(BType), 
           h_B, 
           1, 
           d_B, 
           1
       );
-     //cudaMemcpy(d_B, h_B, sizeof(char)*N*M, cudaMemcpyHostToDevice);
+     cudaMemcpy(d_B, h_B, sizeof(BType)*N*M, cudaMemcpyHostToDevice);
      // 同步函数
 //     cudaThreadSynchronize();
      cudaDeviceSynchronize(); 
+
+
      // 传递进矩阵相乘函数中的参数，具体含义请参考函数手册。
      float a = 1.0; 
      float b = 0;
@@ -135,7 +141,8 @@ int main()
 //         d_C,    // C 在显存中的地址(结果矩阵)
 //         M    // ldc
 //     );
-    cublasGemmEx(handle,               //句柄
+    cublasStatus_t cuberror = 
+      cublasGemmEx(handle,               //句柄
                    CUBLAS_OP_T,         //矩阵 A 属性参数
                    CUBLAS_OP_T,         //矩阵 B 属性参数
                    M,                   //A, C 的行数 
@@ -143,7 +150,7 @@ int main()
                    N,                   //A 的列数和 B 的行数
                    &a,                  //运算式的 α 值
                    d_A,                 //A矩阵
-                   CUDA_R_32F,           //A矩阵计算模式，FP32型
+                   CUDA_R_8I,           //A矩阵计算模式，FP32型
                    N,                   //A矩阵的列数
                    d_B,                 //B矩阵
                    CUDA_R_8I,           //B矩阵计算模式，int8型
@@ -157,18 +164,30 @@ int main()
                    ); 
      
      // 同步函数
-     //cudaDeviceSynchronize();
-     cudaDeviceSynchronize(); 
+     cudaError_t cudaerr = cudaDeviceSynchronize();
+     if (cuberror != 0) {
+        printf("kernel launch failed with error \"%d\".\n",
+               cuberror);
+     }
+
+ 
      // 从 显存 中取出运算结果至 内存中去
      cublasGetVector (
          M * M,    //  要取出元素的个数
-         sizeof(float),    // 每个元素大小
+         sizeof(CType),    // 每个元素大小
          d_C,    // GPU 端起始地址
          1,    // 连续元素之间的存储间隔
          h_C,    // 主机端起始地址
          1    // 连续元素之间的存储间隔
      );
- 
+     cudaMemcpy(h_C, d_C, sizeof(CType)*M*M, cudaMemcpyDeviceToHost);
+     cudaerr = cudaDeviceSynchronize();
+
+     if (cudaerr != cudaSuccess) {
+        printf("Copy with error \"%s\".\n",
+               cudaGetErrorString(cudaerr));
+     }
+
      //或使用cudaMemcpy(h_C, d_C, sizeof(int)*M*M, cudaMemcpyDeviceToHost);
      // 打印运算结果
      cout << "计算结果的转置 ( (A*B)的转置 )：" << endl;
